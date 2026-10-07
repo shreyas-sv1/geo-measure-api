@@ -3,3 +3,4 @@ __pycache__/
 .venv/
 geo.db
 .pytest_cache/
+try_measure.py
