@@ -1,6 +1,12 @@
 from dataclasses import dataclass, field
 from typing import Optional
 
+import io
+import zipfile
+
+import shapefile  # the pyshp package
+from shapely.geometry import shape
+
 from defusedxml import ElementTree as ET
 from pyproj import CRS
 from shapely.geometry import (
@@ -104,3 +110,59 @@ def parse_kml(data: bytes) -> ParsedFile:
         features.append(ParsedFeature(i, geom, props))
 
     return ParsedFile(CRS.from_epsg(4326), features)  # KML is always WGS84
+MAX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024  # guard against zip bombs
+
+
+def parse_shapefile_zip(data: bytes) -> ParsedFile:
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as exc:
+        raise ParseError("File is not a valid zip archive") from exc
+
+    with zf:
+        if sum(i.file_size for i in zf.infolist()) > MAX_UNCOMPRESSED_BYTES:
+            raise ParseError("Archive is too large when uncompressed")
+
+        # read files straight into memory; nothing is extracted to disk
+        members = {n.lower(): n for n in zf.namelist() if not n.endswith("/")}
+        shps = sorted(n for n in members if n.endswith(".shp"))
+        if not shps:
+            raise ParseError("Zip does not contain a .shp file")
+        base = shps[0][:-4]
+
+        def read(ext):
+            name = members.get(base + ext)
+            return io.BytesIO(zf.read(name)) if name else None
+
+        shp, shx, dbf, prj = read(".shp"), read(".shx"), read(".dbf"), read(".prj")
+
+    try:
+        reader = shapefile.Reader(shp=shp, shx=shx, dbf=dbf)
+        field_names = [f[0] for f in reader.fields[1:]] if dbf else []
+        features = []
+        for i, sr in enumerate(reader.iterShapeRecords()):
+            geom = None
+            if sr.shape.shapeType != shapefile.NULL:
+                geom = shape(sr.shape.__geo_interface__)
+            props = dict(zip(field_names, [str(v) for v in sr.record])) if dbf else {}
+            features.append(ParsedFeature(i, geom, props))
+    except Exception as exc:
+        raise ParseError(f"Could not read shapefile: {exc}") from exc
+
+    return ParsedFile(_shapefile_crs(prj, features), features)
+
+
+def _shapefile_crs(prj, features) -> CRS:
+    if prj is not None:
+        try:
+            return CRS.from_wkt(prj.read().decode("utf-8", errors="ignore"))
+        except Exception as exc:
+            raise ParseError(f"Could not parse .prj CRS: {exc}") from exc
+
+    # no .prj: assume WGS84 only if every coordinate looks like lon/lat
+    for f in features:
+        if f.geometry is not None and not f.geometry.is_empty:
+            minx, miny, maxx, maxy = f.geometry.bounds
+            if not (-180 <= minx <= maxx <= 180 and -90 <= miny <= maxy <= 90):
+                raise ParseError("No .prj and coordinates are not lon/lat; cannot determine CRS")
+    return CRS.from_epsg(4326)

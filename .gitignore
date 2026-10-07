@@ -4,3 +4,4 @@ __pycache__/
 geo.db
 .pytest_cache/
 try_measure.py
+make_sample_shp.py
