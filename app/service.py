@@ -31,8 +31,6 @@ def process_file(
     db.add(file_record)
     db.flush()
 
-    successful_count = 0
-
     # Process each feature independently
     for feature in parsed.features:
 
@@ -63,9 +61,12 @@ def process_file(
                 feature_record.unit = result.unit
                 feature_record.projected_crs = result.projected_crs
 
-                feature_record.status = "OK"
-
-                successful_count += 1
+                # Handle supported and unsupported geometries
+                if result.type == "UNSUPPORTED":
+                    feature_record.status = "UNSUPPORTED"
+                    feature_record.error = "Geometry type is not supported"
+                else:
+                    feature_record.status = "OK"
 
         except Exception as exc:
             # One bad feature should not stop the entire file

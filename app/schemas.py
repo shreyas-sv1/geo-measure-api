@@ -1,9 +1,11 @@
-from pydantic import BaseModel
 from typing import Any
+
+from pydantic import BaseModel
 
 
 class FeatureResponse(BaseModel):
-    id: int
+    pk: int
+    file_id: str
     index: int
     geometry_type: str | None
     measurement_type: str | None
@@ -16,11 +18,12 @@ class FeatureResponse(BaseModel):
 
 
 class FileResponse(BaseModel):
-    id: int
+    id: str
     filename: str
     status: str
-    crs: str
+    crs: str | None
     feature_count: int
+    error: str | None
 
 
 class MeasurementResponse(BaseModel):
